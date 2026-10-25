@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поднять test-server
+        uses: actions/checkout@v4
+        with:
+          repository: ITMO-DWS-Green/test-server
+          path: test-server
+      - run: docker compose -f test-server/compose.yaml up -d --build
+
+      - name: Поднять Zabbix
+        run: docker compose up -d
+
+      - name: Дождаться настройки через API
+        run: |
+          code=$(docker compose wait setup)
+          docker compose logs setup
+          test "$code" = "0"
+
+      - name: Zabbix получает данные от test-server
+        run: python3 setup/smoke_test.py
+
+      - name: Логи при ошибке
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail 100

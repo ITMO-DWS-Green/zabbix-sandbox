@@ -1,0 +1,88 @@
+# Zabbix 7.0 LTS для экспериментов.
+#   docker compose up -d
+#   Веб-интерфейс: http://localhost:8070  (Admin / zabbix)
+#
+# После запуска контейнер setup сам настраивает Zabbix через API:
+# - агент мониторит сам Zabbix server;
+# - заводит хосты test-server (gateway, orders, payments, database) с метриками и триггерами.
+
+name: zabbix-sandbox
+
+x-db-env: &db-env
+  DB_SERVER_HOST: postgres
+  POSTGRES_USER: zabbix
+  POSTGRES_PASSWORD: zabbix
+  POSTGRES_DB: zabbix
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix
+      POSTGRES_DB: zabbix
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"]
+      interval: 5s
+      retries: 20
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      ZBX_CACHESIZE: 64M
+    ports:
+      - "10051:10051"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # чтобы доставать до test-server на хосте
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      ZBX_SERVER_HOST: zabbix-server
+      PHP_TZ: Europe/Moscow
+    ports:
+      - "8070:8080"
+    depends_on:
+      - zabbix-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 10s
+      retries: 30
+
+  zabbix-agent2:
+    image: zabbix/zabbix-agent2:alpine-7.0-latest
+    restart: unless-stopped
+    environment:
+      ZBX_HOSTNAME: Zabbix server
+      ZBX_SERVER_HOST: zabbix-server
+    depends_on:
+      - zabbix-server
+
+  # Однократная настройка через API. Повторный запуск безопасен: существующее не трогает.
+  setup:
+    image: python:3.12-alpine
+    restart: "no"
+    environment:
+      ZABBIX_URL: http://zabbix-web:8080
+      ZABBIX_USER: Admin
+      ZABBIX_PASSWORD: zabbix
+      TEST_SERVER_HOST: ${TEST_SERVER_HOST:-host.docker.internal}
+    volumes:
+      - ./setup:/setup:ro
+    command: ["python", "-u", "/setup/setup.py"]
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
