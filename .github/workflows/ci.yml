@@ -24,8 +24,8 @@ jobs:
 
       - name: Дождаться настройки через API
         run: |
-          code=$(docker compose wait setup)
-          docker compose logs setup
+          code=$(docker wait "$(docker compose ps -aq setup)")
+          docker compose logs --no-log-prefix setup
           test "$code" = "0"
 
       - name: Zabbix получает данные от test-server
@@ -36,3 +36,8 @@ jobs:
         run: |
           docker compose ps -a
           docker compose logs --tail 100
+          # Короткие выдержки — в аннотации, их видно в интерфейсе и через API
+          for svc in setup zabbix-server zabbix-web; do
+            tail=$(docker compose logs --no-log-prefix --tail 25 "$svc" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$svc::$tail"
+          done
